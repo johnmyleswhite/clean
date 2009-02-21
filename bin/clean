@@ -1,0 +1,184 @@
+#!/usr/bin/env ruby
+
+# == Synopsis
+#   clean is a utility that (recursively) purges directories of all files
+#   matching any of the regexes specified in the user's ~/.cleanrc file.
+#
+#   By default, it can be used to automatically clean up Emacs backup files.
+#
+# == Examples
+#   This command deletes all unwanted files in the current directory:
+#     clean
+#
+#   This command recursively deletes all unwanted files in this directory:
+#     clean -r
+#
+#   This command deletes all unwanted files in /usr/local/bin:
+#     clean /usr/local/bin
+#
+#   This command echoes every action taken to clean the current directory:
+#     clean -V
+#
+#   This command deltes all unwanted files without asking for confirmation:
+#     clean -a
+#
+# == Usage 
+#   clean [options] directory
+#
+#   For help use: clean -h
+#
+# == Options
+#   -h, --help          Displays help message
+#   -v, --version       Display the version, then exit
+#   -r, --recursive     Clean this directory and all sub-directories
+#   -V, --verbose       Verbose output
+#   -a, --automatic     Automatically delete all matching files without input
+#
+# == Author
+#   John Myles White
+#
+# == Copyright
+#   Copyright (c) 2009 John Myles White. Licensed under the MIT License:
+#   http://www.opensource.org/licenses/mit-license.php
+
+require 'optparse' 
+require 'rdoc/usage'
+require 'ostruct'
+require 'date'
+require 'find'
+require 'rubygems'
+require 'highline/import'
+
+class App
+  VERSION = '1.0.0'
+
+  attr_reader :options
+
+  def initialize(arguments, stdin)
+    @arguments = arguments
+    @stdin = stdin
+    
+    # Set defaults
+    @options = OpenStruct.new()
+    @options.verbose = false
+    @options.recursive = false
+    @options.automatic = false
+  end
+
+  def run
+    if parsed_options?() && arguments_valid?()
+      process_arguments()
+      process_patterns()      
+      process_command()
+    else
+      output_usage()
+    end
+  end
+  
+  protected
+    def parsed_options?
+      opts = OptionParser.new()
+      opts.on('-v', '--version')    { output_version ; exit 0 }
+      opts.on('-h', '--help')       { output_help }
+      opts.on('-V', '--verbose')    { @options.verbose = true }  
+      opts.on('-r', '--recursive')      { @options.recursive = true }
+      opts.on('-a', '--automatic')      { @options.automatic = true }
+
+      opts.parse!(@arguments) rescue return false
+      
+      return true      
+    end
+
+    def output_options
+      puts "Options:\n"
+      
+      @options.marshal_dump.each do |name, val|        
+        puts "  #{name} = #{val}"
+      end
+    end
+
+    def arguments_valid?
+      true if @arguments.length <= 1
+    end
+
+    def output_help
+      output_version()
+      RDoc::usage()
+    end
+
+    def output_usage
+      RDoc::usage('usage')
+    end
+
+    def output_version
+      puts "#{File.basename(__FILE__)} version #{VERSION}"
+    end
+    
+    def process_arguments
+      if @arguments.length == 0
+        @search_directory = Dir.getwd()
+      else
+        @search_directory = @arguments[0]
+      end
+    end
+
+    def process_patterns
+      @patterns = [{:string => '/~$/', :regexp => /~$/}, 
+                   {:string => '/^\#.*\#$/', :regexp => /^\#.*\#$/}]
+
+      profile_filename = File.expand_path('.cleanrc', ENV['HOME'])
+
+      if File.exist?(profile_filename)
+        File.new(profile_filename, 'r').readlines().each do |pattern|
+          @patterns << {:string => pattern.chomp,
+                        :regexp => Regexp.new(pattern.chomp)}
+        end
+      end
+    end
+
+    def process_path(path)
+      return nil if File.directory?(path)
+
+      puts path if @options.verbose
+
+      @patterns.each do |pattern|
+        if File.basename(path).match(pattern[:regexp])
+          if @options.automatic
+            puts "\nDeleted: #{path}\n which matched pattern: #{pattern[:string]}\n\n" if @options.verbose
+            File.delete(path)
+          else
+            puts "\nFile: #{path}\nMatched pattern: #{pattern[:string]}\n\n"
+            decision = ask("Delete? [y/n] ") { |q| q.default = "n" }
+            File.delete(path) if decision.match(/y/i)
+          end
+        end
+      end
+
+      return nil
+    end
+
+    def recursive_search
+      Find.find(@search_directory) do |path|
+        process_path(path)
+      end
+    end
+    
+    def directory_search
+      Dir.new(@search_directory).entries.each do |path|
+        process_path(path)
+      end
+    end
+
+    def process_command
+      if @options.recursive
+        recursive_search()
+      else
+        directory_search()
+      end
+      
+      return nil
+    end
+end
+
+app = App.new(ARGV, STDIN)
+app.run()
